@@ -268,7 +268,6 @@ def _print(reports: list[WalletReport]) -> None:
 
 
 def main(argv=None) -> list[WalletReport]:
-    import os
     ap = argparse.ArgumentParser(description="Score candidate smart-money wallets (Helius RPC)")
     ap.add_argument("wallets", help="file with one wallet address per line")
     ap.add_argument("--days", type=int, default=30)
@@ -280,8 +279,7 @@ def main(argv=None) -> list[WalletReport]:
                     help="GUT wallets are written here in wallets/*.txt format")
     args = ap.parse_args(argv)
 
-    key = os.environ.get("HELIUS_API_KEY", "")
-    url = os.environ.get("HELIUS_RPC_URL") or (helius.RPC.format(key=key) if key else "")
+    url = helius.rpc_url_from_env()
     if not url:
         raise SystemExit("HELIUS_API_KEY (oder HELIUS_RPC_URL) ist nicht gesetzt.")
     wallets = load_wallets(args.wallets)

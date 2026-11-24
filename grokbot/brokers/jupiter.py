@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import time
 import urllib.error
 import urllib.request
@@ -59,8 +58,7 @@ class Solana:
 
     @classmethod
     def from_env(cls) -> "Solana":
-        key = os.environ.get("HELIUS_API_KEY", "")
-        url = os.environ.get("HELIUS_RPC_URL") or (helius.RPC.format(key=key) if key else "")
+        url = helius.rpc_url_from_env()
         if not url:
             raise SystemExit("Für Dry-Run/Echtgeld wird HELIUS_API_KEY (oder HELIUS_RPC_URL) benötigt.")
         return cls(url)
