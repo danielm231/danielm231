@@ -63,9 +63,38 @@ Ich habe 40 % bei **2×** angenommen.
   Holder, Top 10, LP-Lock, Creator-Anteil), Jupiter-Sell-Quote als Honeypot-Check.
   Fills bleiben simuliert, inklusive Price Impact, 0,3 % Gebühr und 1 % MEV/Latenz-Aufschlag.
 
-**Smart Money / KOL im Live-Modus:** dafür braucht es einen Wallet-Tracker (z. B. Helius-Webhooks
-auf die 40 Wallets). Ohne den feuern diese beiden Signale nie. Der Feed hat dafür den Hook
-`LiveFeed(wallet_activity=fn)`, wobei `fn(mint, now) -> (anzahl_smart_wallet_käufe_10min, kol_gekauft)`.
+### Smart Money / KOL über Helius
+
+Der Agent `WALLETS` (`grokbot/feeds/helius.py`) beobachtet im Live-Modus die Wallets über den
+normalen Helius-RPC. Pro Wallet und Abfrage wird zuerst nur geprüft, ob es **neue** Transaktionen
+gibt (1 Credit). Nur neue, erfolgreiche Transaktionen der letzten 30 min werden geladen
+(1 Credit pro Stück). Ein **Kauf** heißt: Der Bestand der Wallet an einem Token (nicht
+SOL/USDC/USDT) ist in der Transaktion gestiegen.
+
+- **smart money**: 3+ Smart-Money-Wallets kaufen denselben Token innerhalb von 10 min
+- **KOL bought**: mindestens eine KOL-Wallet hat ihn in den letzten 30 min gekauft
+
+Einrichten:
+
+1. Kostenlosen API-Key auf https://dashboard.helius.dev holen
+2. Wallets eintragen, eine Adresse pro Zeile: `wallets/smart_money.txt` (das Original nutzt 40)
+   und `wallets/kol.txt`
+3. Starten:
+
+```bash
+export HELIUS_API_KEY=dein-key
+python -m grokbot --mode live --now
+# optional: --smart-wallets pfad.txt --kol-wallets pfad.txt --helius-poll 60
+```
+
+Ohne Key oder ohne Wallets bleibt der Tracker aus (`WALLETS off` im Dashboard), dann feuern diese
+zwei Signale nie.
+
+**Credits (Free-Plan: 1 Mio./Monat):** 40 Wallets alle 60 s sind ~19.000 Credits pro Nacht plus
+1 Credit pro neuer Wallet-Transaktion, grob 20.000–30.000 pro Nacht, also ~600.000–900.000 bei
+30 Nächten im Monat. Der aktuelle Verbrauch steht im Dashboard (`~credits`). Wenn es knapp wird:
+`--helius-poll 120` halbiert die Grundkosten. Pro Abfrage werden maximal 25 neue Transaktionen
+je Wallet gelesen, bei extrem aktiven Wallets können Käufe fehlen.
 
 ## Tests
 
