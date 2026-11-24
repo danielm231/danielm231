@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from . import server
 from .config import BotConfig
 from .dashboard import terminal, write_html
 from .feeds import LiveFeed, SimulatedFeed
@@ -30,6 +31,11 @@ def main(argv=None) -> dict:
                     help="live: file with smart-money wallet addresses (Helius tracker)")
     ap.add_argument("--kol-wallets", default="wallets/kol.txt",
                     help="live: file with KOL wallet addresses (Helius tracker)")
+    ap.add_argument("--serve", nargs="?", const=8000, type=int, metavar="PORT",
+                    help="start the built-in dashboard web server (default port 8000) "
+                         "to watch from your phone; keeps serving after 07:00 until Ctrl+C")
+    ap.add_argument("--host", default="0.0.0.0",
+                    help="address for --serve (0.0.0.0 = whole network, 127.0.0.1 = this machine only)")
     ap.add_argument("--helius-poll", type=int, default=60,
                     help="live: seconds between Helius wallet polls (each poll = 1 call per wallet)")
     args = ap.parse_args(argv)
@@ -39,6 +45,12 @@ def main(argv=None) -> dict:
     out = Path(args.out) / f"{args.mode}-{stamp}"
     out.mkdir(parents=True, exist_ok=True)
     dash = out / "dashboard.html"
+    srv = None
+    if args.serve:
+        srv = server.start(out, port=args.serve, host=args.host)
+        print("Dashboard im Browser (Handy im selben WLAN):")
+        for u in server.urls(srv):
+            print(f"  {u}")
 
     if args.mode == "sim":
         start, end = session_window(cfg, datetime.now())
@@ -97,6 +109,13 @@ def main(argv=None) -> dict:
     print(f"Top 3 coins {recap['top3_coins']}")
     if recap["paused"]:
         print(f"Paused: {recap['paused']}")
+    if srv:
+        print("\nDashboard läuft weiter unter " + server.urls(srv)[0] + "  (beenden mit Ctrl+C)")
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            srv.shutdown()
     return recap
 
 

@@ -23,7 +23,7 @@ python -m grokbot --mode live
 python -m grokbot --mode live --now
 ```
 
-Optionen: `--balance 70 --start 23:00 --end 07:00 --out runs --quiet`
+Optionen: `--balance 70 --start 23:00 --end 07:00 --out runs --quiet --serve`
 
 Jeder Lauf schreibt nach `runs/<mode>-<zeit>/`:
 
@@ -32,6 +32,29 @@ Jeder Lauf schreibt nach `runs/<mode>-<zeit>/`:
 | `dashboard.html` | Live-Dashboard (aktualisiert sich alle 10 s): Balance, Trades, W/L, offene Position, Agent-Status, Equity-Kurve, komplettes Nacht-Log |
 | `night.log.jsonl` | jede ENTER / PARTIAL / EXIT / FILTERED / PAUSE Zeile mit Grund, Größe, Fill-Preis, PnL |
 | `recap.json` | Start vs. End, bester / schlechtester Trade, Anzahl Trades, Win-Rate, Top-3-Coins, max. Drawdown |
+
+## Dashboard am Handy ansehen
+
+Mit `--serve` startet der Bot einen kleinen Webserver für das Dashboard:
+
+```bash
+python -m grokbot --mode live --serve
+```
+
+Im Terminal stehen dann die Adressen, z. B. `http://192.168.1.23:8000`. Die öffnest du am Handy
+im Browser. Handy und Rechner müssen im selben WLAN sein. Die Seite aktualisiert sich alle
+10 Sekunden. Nach 07:00 läuft der Server mit dem Recap weiter, bis du ihn mit Ctrl+C beendest.
+
+| Adresse | Inhalt |
+|---|---|
+| `/` | Dashboard |
+| `/log` | Nacht-Log als Rohdaten |
+| `/recap` | Recap als JSON (ab 07:00) |
+
+Anderer Port: `--serve 8080`. Der Server liefert nur diese drei Dateien des aktuellen Laufs aus,
+keine anderen Dateien vom Rechner. **Auf einem Mietserver im Internet** wäre das Dashboard aber für
+jeden sichtbar, der die Adresse kennt. Dort `--host 127.0.0.1` setzen und per SSH-Tunnel zugreifen
+(`ssh -L 8000:localhost:8000 user@server`, dann am Gerät `http://localhost:8000`).
 
 ## Die 6 Agents
 

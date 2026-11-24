@@ -66,7 +66,7 @@ def write_html(o: Orchestrator, path: Path, mode: str, recap: dict | None = None
 :root{{--bg:#f7f7f8;--card:#fff;--fg:#16181d;--muted:#6b7280;--accent:#1f8a4c;--line:#e5e7eb}}
 @media (prefers-color-scheme:dark){{:root{{--bg:#0f1115;--card:#171a21;--fg:#e8eaee;--muted:#9097a3;--accent:#3ccf7a;--line:#262a33}}}}
 body{{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 ui-monospace,Menlo,monospace}}
-main{{max-width:960px;margin:0 auto;padding:16px}}
+main{{max-width:960px;margin:0 auto;padding:16px}}h1{{font-size:22px}}
 .kpis{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}}
 .card{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-top:12px}}
 .k{{color:var(--muted);font-size:12px}}.v{{font-size:20px;font-weight:600}}
