@@ -65,9 +65,11 @@ Ich habe 40 % bei **2×** angenommen.
 
 ### Smart Money / KOL über Helius
 
-Der Agent `WALLETS` (`grokbot/feeds/helius.py`) fragt im Live-Modus regelmäßig die letzten
-Swaps jeder beobachteten Wallet über die Helius Enhanced Transactions API ab. Ein **Kauf** ist ein
-Swap, bei dem die Wallet einen Token bekommt, der nicht SOL/USDC/USDT ist.
+Der Agent `WALLETS` (`grokbot/feeds/helius.py`) beobachtet im Live-Modus die Wallets über den
+normalen Helius-RPC. Pro Wallet und Abfrage wird zuerst nur geprüft, ob es **neue** Transaktionen
+gibt (1 Credit). Nur neue, erfolgreiche Transaktionen der letzten 30 min werden geladen
+(1 Credit pro Stück). Ein **Kauf** heißt: Der Bestand der Wallet an einem Token (nicht
+SOL/USDC/USDT) ist in der Transaktion gestiegen.
 
 - **smart money**: 3+ Smart-Money-Wallets kaufen denselben Token innerhalb von 10 min
 - **KOL bought**: mindestens eine KOL-Wallet hat ihn in den letzten 30 min gekauft
@@ -86,10 +88,13 @@ python -m grokbot --mode live --now
 ```
 
 Ohne Key oder ohne Wallets bleibt der Tracker aus (`WALLETS off` im Dashboard), dann feuern diese
-zwei Signale nie. Jede Abfrage kostet pro Wallet einen API-Call: 40 Wallets alle 60 s sind
-~19.000 Calls pro Nacht. Prüfe im Helius-Dashboard, ob dein Plan das abdeckt, und erhöhe sonst
-`--helius-poll`. Pro Wallet werden die letzten 20 Swaps gelesen. Bei Wallets, die extrem viel
-handeln, können dazwischen Käufe fehlen.
+zwei Signale nie.
+
+**Credits (Free-Plan: 1 Mio./Monat):** 40 Wallets alle 60 s sind ~19.000 Credits pro Nacht plus
+1 Credit pro neuer Wallet-Transaktion, grob 20.000–30.000 pro Nacht, also ~600.000–900.000 bei
+30 Nächten im Monat. Der aktuelle Verbrauch steht im Dashboard (`~credits`). Wenn es knapp wird:
+`--helius-poll 120` halbiert die Grundkosten. Pro Abfrage werden maximal 25 neue Transaktionen
+je Wallet gelesen, bei extrem aktiven Wallets können Käufe fehlen.
 
 ## Tests
 

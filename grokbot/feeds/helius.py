@@ -1,15 +1,17 @@
-"""Smart-money / KOL wallet tracker via the Helius Enhanced Transactions API.
+"""Smart-money / KOL wallet tracker over the Helius RPC (standard Solana JSON-RPC).
 
-Every `poll_seconds` it fetches the latest SWAP transactions of every tracked
-wallet (in parallel) and records which wallet bought which token when.
-A "buy" is a swap in which the wallet receives a token that is not SOL / a
-stablecoin.
+Credit-friendly design (standard RPC calls cost 1 credit each on Helius):
+  1. every `poll_seconds`, per wallet: getSignaturesForAddress(until=<last seen>)
+     -> only NEW signatures come back (1 credit per wallet per poll)
+  2. only for new, successful, recent signatures: getTransaction(jsonParsed)
+     -> 1 credit per new transaction
+A "buy" = the wallet's balance of a token (not SOL/USDC/USDT) went UP in that
+transaction, read from pre/postTokenBalances.
 
 Plug into the live feed:  LiveFeed(wallet_activity=tracker)
-The tracker is called as tracker(mint, now) -> (smart wallets bought in 10 min,
-KOL bought within kol_window).
+Called as tracker(mint, now) -> (smart wallets bought within 10 min, KOL bought within 30 min)
 
-Needs a free Helius API key: https://dashboard.helius.dev  ->  env HELIUS_API_KEY
+Key: env HELIUS_API_KEY (or a full RPC URL in HELIUS_RPC_URL).
 """
 from __future__ import annotations
 
@@ -18,13 +20,12 @@ import os
 import threading
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 
-API = "https://api.helius.xyz/v0/addresses/{addr}/transactions"
+RPC = "https://mainnet.helius-rpc.com/?api-key={key}"
 QUOTE_MINTS = {
     "So11111111111111111111111111111111111111112",   # wSOL
     "EPjFWdd5AufqSSqeM2qFJEcpzEspzrD2fXZsTZG3mvgo",  # USDC
@@ -32,11 +33,19 @@ QUOTE_MINTS = {
 }
 
 
-def _get(url: str, timeout: float = 10.0):
-    req = urllib.request.Request(url, headers={"User-Agent": "grokbot-paper/1.0",
-                                               "Accept": "application/json"})
+class RpcError(Exception):
+    pass
+
+
+def _post(url: str, payload: dict, timeout: float = 10.0):
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST",
+                                 headers={"Content-Type": "application/json",
+                                          "User-Agent": "grokbot-paper/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode())
+        body = json.loads(r.read().decode())
+    if "error" in body:
+        raise RpcError(str(body["error"].get("message", body["error"])))
+    return body.get("result")
 
 
 def load_wallets(path: str | Path | None) -> list[str]:
@@ -52,66 +61,81 @@ def load_wallets(path: str | Path | None) -> list[str]:
 
 
 def buys_from_tx(tx: dict, wallet: str) -> list[str]:
-    """Mints the wallet received in this swap transaction (i.e. bought)."""
-    if tx.get("transactionError"):
+    """Mints whose balance owned by `wallet` increased in this (jsonParsed) transaction."""
+    meta = (tx or {}).get("meta") or {}
+    if meta.get("err"):
         return []
-    received = {t.get("mint") for t in tx.get("tokenTransfers") or []
-                if t.get("toUserAccount") == wallet and float(t.get("tokenAmount") or 0) > 0}
-    sent = {t.get("mint") for t in tx.get("tokenTransfers") or []
-            if t.get("fromUserAccount") == wallet}
-    # receiving a token you also sent in the same tx is a transfer/route, not a buy
-    return [m for m in received - sent - QUOTE_MINTS if m]
+
+    def balances(key):
+        out: dict[str, float] = {}
+        for b in meta.get(key) or []:
+            if b.get("owner") == wallet:
+                amt = float((b.get("uiTokenAmount") or {}).get("amount") or 0)
+                out[b["mint"]] = out.get(b["mint"], 0.0) + amt
+        return out
+
+    pre, post = balances("preTokenBalances"), balances("postTokenBalances")
+    return [m for m, amt in post.items() if amt > pre.get(m, 0.0) and m not in QUOTE_MINTS]
 
 
 class HeliusWalletTracker:
     name = "WALLETS"
 
     def __init__(self, smart_wallets: list[str], kol_wallets: list[str],
-                 api_key: str | None = None, window_min: int = 10, kol_window_min: int = 30,
-                 poll_seconds: int = 60, workers: int = 5, tx_limit: int = 20):
-        self.api_key = api_key or os.environ.get("HELIUS_API_KEY", "")
+                 api_key: str | None = None, rpc_url: str | None = None,
+                 window_min: int = 10, kol_window_min: int = 30,
+                 poll_seconds: int = 60, workers: int = 5, sig_limit: int = 25):
+        key = api_key or os.environ.get("HELIUS_API_KEY", "")
+        self.rpc_url = rpc_url or os.environ.get("HELIUS_RPC_URL") or (RPC.format(key=key) if key else "")
         self.smart = set(smart_wallets)
         self.kol = set(kol_wallets)
         self.window = timedelta(minutes=window_min)
         self.kol_window = timedelta(minutes=kol_window_min)
         self.poll_seconds = poll_seconds
         self.workers = workers
-        self.tx_limit = tx_limit
-        # mint -> wallet -> latest buy time
-        self.buys: dict[str, dict[str, datetime]] = {}
-        self._seen: set[str] = set()
+        self.sig_limit = sig_limit
+        self.buys: dict[str, dict[str, datetime]] = {}   # mint -> wallet -> latest buy
+        self._last_sig: dict[str, str] = {}                # wallet -> newest seen signature
         self._last_poll = 0.0
         self._lock = threading.Lock()
         self.errors = 0
         self.polls = 0
+        self.credits = 0
 
     @property
     def enabled(self) -> bool:
-        return bool(self.api_key) and bool(self.smart or self.kol)
+        return bool(self.rpc_url) and bool(self.smart or self.kol)
+
+    def _call(self, method: str, params: list):
+        with self._lock:
+            self.credits += 1
+        return _post(self.rpc_url, {"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
 
     # ----------------------------------------------------------------- polling
-    def _fetch(self, wallet: str) -> list[dict]:
-        q = urllib.parse.urlencode({"api-key": self.api_key, "type": "SWAP",
-                                    "limit": self.tx_limit})
+    def _poll_wallet(self, wallet: str) -> None:
         try:
-            return _get(API.format(addr=wallet) + "?" + q) or []
-        except (urllib.error.URLError, TimeoutError, ValueError):
+            opts = {"limit": self.sig_limit}
+            if wallet in self._last_sig:
+                opts["until"] = self._last_sig[wallet]
+            sigs = self._call("getSignaturesForAddress", [wallet, opts]) or []
+            if not sigs:
+                return
+            self._last_sig[wallet] = sigs[0]["signature"]   # newest first
+            oldest = time.time() - self.kol_window.total_seconds()
+            for s in sigs:
+                if s.get("err") or (s.get("blockTime") or 0) < oldest:
+                    continue          # failed or too old to matter: don't spend a credit
+                tx = self._call("getTransaction", [s["signature"], {
+                    "encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}])
+                ts = datetime.fromtimestamp((tx or {}).get("blockTime") or s["blockTime"])
+                for mint in buys_from_tx(tx, wallet):
+                    with self._lock:
+                        prev = self.buys.setdefault(mint, {}).get(wallet)
+                        if prev is None or ts > prev:
+                            self.buys[mint][wallet] = ts
+        except (urllib.error.URLError, TimeoutError, ValueError, KeyError, RpcError):
             with self._lock:
                 self.errors += 1
-            return []
-
-    def ingest(self, wallet: str, txs: list[dict]) -> None:
-        with self._lock:
-            for tx in txs:
-                sig = tx.get("signature")
-                if not sig or sig in self._seen:
-                    continue
-                self._seen.add(sig)
-                ts = datetime.fromtimestamp(tx.get("timestamp") or 0)
-                for mint in buys_from_tx(tx, wallet):
-                    prev = self.buys.setdefault(mint, {}).get(wallet)
-                    if prev is None or ts > prev:
-                        self.buys[mint][wallet] = ts
 
     def refresh(self, force: bool = False) -> None:
         if not self.enabled:
@@ -119,10 +143,8 @@ class HeliusWalletTracker:
         if not force and time.time() - self._last_poll < self.poll_seconds:
             return
         self._last_poll = time.time()
-        wallets = sorted(self.smart | self.kol)
         with ThreadPoolExecutor(max_workers=self.workers) as pool:
-            for wallet, txs in zip(wallets, pool.map(self._fetch, wallets)):
-                self.ingest(wallet, txs)
+            list(pool.map(self._poll_wallet, sorted(self.smart | self.kol)))
         self.polls += 1
         self._prune()
 
@@ -133,23 +155,20 @@ class HeliusWalletTracker:
                 self.buys[mint] = {w: t for w, t in self.buys[mint].items() if t >= cutoff}
                 if not self.buys[mint]:
                     del self.buys[mint]
-            if len(self._seen) > 50_000:
-                self._seen.clear()
 
     # --------------------------------------------------------------- interface
     def __call__(self, mint: str, now: datetime) -> tuple[int, bool]:
         self.refresh()
         with self._lock:
             by_wallet = dict(self.buys.get(mint, {}))
-        smart = sum(1 for w, t in by_wallet.items()
-                    if w in self.smart and now - self.window <= t <= now + timedelta(minutes=1))
-        kol = any(w in self.kol and now - self.kol_window <= t <= now + timedelta(minutes=1)
-                  for w, t in by_wallet.items())
+        lo_s, lo_k, hi = now - self.window, now - self.kol_window, now + timedelta(minutes=1)
+        smart = sum(1 for w, t in by_wallet.items() if w in self.smart and lo_s <= t <= hi)
+        kol = any(w in self.kol and lo_k <= t <= hi for w, t in by_wallet.items())
         return smart, kol
 
     @property
     def status(self) -> str:
         if not self.enabled:
             return "off (no HELIUS_API_KEY or no wallets)"
-        return (f"{len(self.smart)} smart / {len(self.kol)} KOL wallets, "
-                f"{self.polls} polls, {self.errors} errors, {len(self.buys)} tokens bought")
+        return (f"{len(self.smart)} smart / {len(self.kol)} KOL wallets, {self.polls} polls, "
+                f"~{self.credits} credits, {self.errors} errors, {len(self.buys)} tokens bought")
