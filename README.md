@@ -4,9 +4,9 @@ Nachbau des „Grok Bot“-Prompts als echtes Programm: 6 Agents handeln über N
 (23:00 → 07:00) frische Solana-Meme-Coins mit $70 Startkapital, loggen jede Entscheidung
 und drucken morgens ein Recap.
 
-> **Es wird nur auf Papier gehandelt.** Es gibt keine Wallet, keine Private Keys, keine echten
-> Swaps. Erst wenn der Bot über viele Nächte mit Live-Daten überzeugt, lohnt es sich,
-> über echte Ausführung nachzudenken. Meme-Coins sind extrem riskant: die meisten gehen auf null.
+> **Standard ist Paper-Trading.** Echtgeld gibt es nur mit ausdrücklichem `--real`, eigener
+> Bot-Wallet und getipptem „JA“ (siehe [Echtes Trading](#echtes-trading)). Meme-Coins sind extrem
+> riskant: die meisten gehen auf null.
 
 ## Start
 
@@ -169,6 +169,67 @@ begrenzt das auf ~300 pro Wallet, 40 Kandidaten also höchstens ~12.000. `--max-
 **Grenzen:** Nur Trades gegen SOL werden gezählt (USDC-Trades und Token-zu-Token-Routen werden
 übersprungen). Bei `--max-tx` wird nur der neueste Teil der Historie bewertet. Konto-Miete
 (~0,002 SOL pro neuem Token-Konto) zählt als Kosten und drückt den PnL bei Kleinst-Trades leicht.
+
+## Echtes Trading
+
+Drei Stufen, jede mit einem eigenen Schalter:
+
+| Stufe | Befehl | Was passiert |
+|---|---|---|
+| Paper | `python3 -m grokbot --mode live` | simulierte Fills, keine Wallet |
+| Dry-Run | `python3 -m grokbot --dry-run` | echte Jupiter-Transaktionen mit deiner Bot-Wallet werden gebaut, signiert und von der Blockchain **simuliert**, aber **nicht gesendet** |
+| Echtgeld | `python3 -m grokbot --real` | echte Swaps, Buchung mit den echten Beträgen aus der Blockchain |
+
+### Einrichten
+
+```bash
+python3 -m pip install -r requirements-real.txt   # Signier-Bibliothek (solders)
+python3 -m grokbot.wallet new                     # neue Bot-Wallet, zeigt die Adresse
+python3 -m grokbot.wallet show                    # Adresse + Guthaben
+```
+
+- Der Schlüssel liegt in `~/.grokbot/wallet.json` (nur für dich lesbar, nie im Repo). **Backup
+  davon machen**, ohne die Datei ist das Guthaben weg.
+- Eine bestehende Wallet importieren: `python3 -m grokbot.wallet import` (Eingabe unsichtbar).
+  Nur eine Wallet nehmen, die ausschließlich für den Bot da ist.
+- An die Adresse nur schicken, was du verlieren kannst, plus ~0,05 SOL für Gebühren.
+  Auch der Dry-Run braucht Guthaben, weil die Blockchain sonst „zu wenig SOL“ simuliert. Er gibt
+  aber nichts davon aus.
+- `HELIUS_API_KEY` muss gesetzt sein: Transaktionen laufen über deinen Helius-RPC.
+
+### Sicherheitsgurte
+
+| Schutz | Standard | Option |
+|---|---|---|
+| Budget, das der Bot insgesamt nutzt | $15 (höchstens Guthaben minus Reserve) | `--budget` |
+| harte Obergrenze pro Trade | $5 | `--max-trade` |
+| Kill-Switch: alles verkaufen und stoppen bei Verlust von | 40 % des Budgets | `--kill-pct` |
+| SOL-Reserve für Gebühren, wird nie gehandelt | 0,02 SOL | `RealConfig` |
+| Priority-Fee pro Swap höchstens | 0,0002 SOL | `RealConfig` |
+| Start nur nach getipptem `JA` | immer | - |
+| Einstieg in einem Teil statt zwei (halbe Gebühren) | immer bei Dry-Run/Echtgeld | - |
+
+Verhalten bei Problemen:
+
+- **Verkauf scheitert:** neue Versuche mit 2,5 → 5 → 10 → 20 % Slippage. Klappt keiner, bleibt die
+  Position und wird beim nächsten Tick erneut verkauft. Nach 10 fehlgeschlagenen Runden (z. B. Rug
+  ohne Liquidität) wird sie abgeschrieben, der Token bleibt in der Wallet.
+- **5 Fehler in Folge** (z. B. Netzwerk weg): alles verkaufen und stoppen.
+- **Neustart nach Absturz:** Die Wallet ist die Quelle der Wahrheit. Beim Start listet der Bot
+  Restbestände auf und fragt, ob er sie verkaufen soll.
+- **Nach einem Komplettverkauf** wird das Token-Konto geschlossen, die ~0,002 SOL Miete kommen zurück.
+
+Das Recap enthält zusätzlich `swaps` und `network_fees_sol`.
+
+### Empfohlene Reihenfolge
+
+1. 1–2 Wochen `--mode live` (Paper) und die Recaps auswerten
+2. ein paar Nächte `--dry-run`: Prüfen, ob Simulationen durchgehen (`FILTERED … Simulation
+   fehlgeschlagen` heißt: dieser Coin wäre nicht kaufbar gewesen)
+3. `--real --budget 15 --max-trade 5`
+4. erst danach mehr Budget
+
+Mit der Start-Datei geht das im Terminal so: `"./Grok Bot starten.command" --real`
 
 ## Tests
 

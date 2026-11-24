@@ -8,8 +8,9 @@ from __future__ import annotations
 from datetime import datetime
 
 from ..config import ExecutorConfig
-from ..models import ClosedTrade, PairSnapshot, Position, Signal
+from ..models import BrokerError, ClosedTrade, PairSnapshot, Position, Signal
 from .equity import EquityTracker
+
 from .logger import TradeLogger
 
 
@@ -26,12 +27,12 @@ class PaperBroker:
         side = max(liquidity_usd / 2, 1.0)
         return 100 * usd / (side + usd)
 
-    def buy(self, usd: float, s: PairSnapshot) -> tuple[float, float]:
-        """Return (tokens received, avg fill price)."""
+    def buy(self, usd: float, s: PairSnapshot) -> tuple[float, float, float]:
+        """Return (tokens received, avg fill price, usd spent)."""
         impact = self.impact_pct(usd, s.liquidity_usd)
         fill = s.price * (1 + (impact + self.extra) / 100)
         tokens = usd * (1 - self.fee_pct / 100) / fill
-        return tokens, fill
+        return tokens, fill, usd
 
     def sell(self, tokens: float, s: PairSnapshot) -> tuple[float, float]:
         """Return (usd received, avg fill price)."""
@@ -45,6 +46,7 @@ class PaperBroker:
 
 class Executor:
     name = "EXECUTOR"
+    MAX_SELL_FAILURES = 10
 
     def __init__(self, cfg: ExecutorConfig, equity: EquityTracker, log: TradeLogger,
                  broker: PaperBroker | None = None):
@@ -67,7 +69,11 @@ class Executor:
             self.log.log(now, "FILTERED", s.symbol,
                          f"entry part {part}: slippage {imp:.2f}% > {self.cfg.max_slippage_pct}%")
             return False
-        tokens, fill = self.broker.buy(usd, s)
+        try:
+            tokens, fill, usd = self.broker.buy(usd, s)
+        except BrokerError as e:
+            self.log.log(now, "FILTERED", s.symbol, f"entry part {part}: Kauf fehlgeschlagen: {e}")
+            return False
         self.equity.cash -= usd
         total_cost = pos.entry_price * pos.tokens + fill * tokens
         pos.tokens += tokens
@@ -94,20 +100,34 @@ class Executor:
 
     # --------------------------------------------------------------- management
     def _sell(self, pos: Position, tokens: float, s: PairSnapshot, now: datetime,
-              reason: str) -> None:
+              reason: str) -> bool:
+        """Sell; on failure the position stays untouched and is retried next tick."""
         tokens = min(tokens, pos.tokens)
-        usd, fill = self.broker.sell(tokens, s)
+        try:
+            usd, fill = self.broker.sell(tokens, s)
+        except BrokerError as e:
+            pos.sell_failures += 1
+            self.log.log(now, "ERROR", s.symbol, f"{reason}: {e} "
+                         f"(Versuch {pos.sell_failures}/{self.MAX_SELL_FAILURES})")
+            return False
         pos.tokens -= tokens
         pos.realized_usd += usd
         self.equity.cash += usd
         self.log.log(now, "EXIT" if pos.tokens <= 1e-12 else "PARTIAL", s.symbol,
                      reason, size=usd, price=fill or None,
                      pnl=pos.pnl_usd if pos.tokens <= 1e-12 else None)
+        return True
 
     def _close(self, pos: Position, s: PairSnapshot, now: datetime, reason: str
-               ) -> ClosedTrade:
-        if pos.tokens > 0:
-            self._sell(pos, pos.tokens, s, now, reason)
+               ) -> ClosedTrade | None:
+        if pos.tokens > 0 and not self._sell(pos, pos.tokens, s, now, reason):
+            if pos.sell_failures < self.MAX_SELL_FAILURES:
+                return None                    # still holding - retry next tick
+            # unsellable (rug / no liquidity): write off, tokens stay in the wallet
+            self.log.log(now, "EXIT", s.symbol, f"abgeschrieben nach {pos.sell_failures} "
+                         "fehlgeschlagenen Verkäufen - Token bleibt in der Wallet",
+                         size=0.0, pnl=pos.realized_usd - pos.invested_usd)
+            reason = f"abgeschrieben ({reason})"
         del self.positions[pos.mint]
         self._update_status()
         return ClosedTrade(pos.symbol, pos.mint, pos.opened_at, now,
@@ -145,8 +165,10 @@ class Executor:
         # 4) take-profit ladder
         while pos.tp_hits < len(c.tp_ladder) and mult >= c.tp_ladder[pos.tp_hits][0]:
             level, frac = c.tp_ladder[pos.tp_hits]
+            if not self._sell(pos, pos.initial_tokens * frac, s, now,
+                              f"TP{pos.tp_hits + 1} at {level:g}x"):
+                break
             pos.tp_hits += 1
-            self._sell(pos, pos.initial_tokens * frac, s, now, f"TP{pos.tp_hits} at {level:g}x")
 
         # 5) trailing stop on the runner (after first TP)
         if pos.tp_hits > 0:
