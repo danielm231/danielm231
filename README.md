@@ -96,6 +96,40 @@ zwei Signale nie.
 `--helius-poll 120` halbiert die Grundkosten. Pro Abfrage werden maximal 25 neue Transaktionen
 je Wallet gelesen, bei extrem aktiven Wallets können Käufe fehlen.
 
+## Wallet-Prüfer
+
+Bewertet Kandidaten für `wallets/smart_money.txt` anhand ihrer echten Swaps (Helius-RPC):
+
+```bash
+export HELIUS_API_KEY=dein-key
+python -m grokbot.walletcheck kandidaten.txt --days 30
+```
+
+`kandidaten.txt` hat dasselbe Format wie die Wallet-Listen. Pro Wallet werden die Swaps der
+letzten N Tage geladen, Käufe und Verkäufe je Token gegen SOL verrechnet und bewertet:
+
+| Kennzahl | führt zu |
+|---|---|
+| Verlust über den Zeitraum, Trefferquote < 30 % | **RAUS** |
+| > 30 % der Trades unter 60 s gehalten (Sniper/Bot) | **RAUS** |
+| weniger als 10 abgeschlossene Trades (`--min-trades`) | PRUEFEN |
+| Trefferquote > 85 % (möglicher Lockvogel) | PRUEFEN |
+| > 60 % des Gewinns aus einem einzigen Trade | PRUEFEN |
+| Median-Haltedauer < 2 min, Ø Einsatz < 0,2 SOL | PRUEFEN |
+| Wallet jünger als 14 Tage (mit Geldgeber-Adresse) | PRUEFEN |
+| nichts davon | **GUT** |
+
+Ergebnis: Tabelle im Terminal, `wallet_report.csv` mit allen Kennzahlen und
+`wallets/gepruefte_wallets.txt` mit den GUT-Wallets zum Rüberkopieren.
+
+**Credits:** 1 pro geladener Transaktion (+1 pro 1000 Signaturen). `--max-tx 300` (Standard)
+begrenzt das auf ~300 pro Wallet, 40 Kandidaten also höchstens ~12.000. `--max-credits`
+(Standard 20.000) bricht den Lauf ab, bevor es mehr wird.
+
+**Grenzen:** Nur Trades gegen SOL werden gezählt (USDC-Trades und Token-zu-Token-Routen werden
+übersprungen). Bei `--max-tx` wird nur der neueste Teil der Historie bewertet. Konto-Miete
+(~0,002 SOL pro neuem Token-Konto) zählt als Kosten und drückt den PnL bei Kleinst-Trades leicht.
+
 ## Tests
 
 ```bash
