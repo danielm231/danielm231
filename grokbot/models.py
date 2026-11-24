@@ -79,6 +79,7 @@ class Position:
     entries_done: int = 0
     first_entry_price: float = 0.0
     signals: list[str] = field(default_factory=list)
+    sell_failures: int = 0
 
     @property
     def pnl_usd(self) -> float:
@@ -102,3 +103,7 @@ class ClosedTrade:
     @property
     def pnl_pct(self) -> float:
         return 100 * self.pnl_usd / self.invested_usd if self.invested_usd else 0.0
+
+
+class BrokerError(Exception):
+    """A swap could not be executed; the bot keeps its previous state."""
