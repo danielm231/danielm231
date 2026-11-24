@@ -33,6 +33,23 @@ Jeder Lauf schreibt nach `runs/<mode>-<zeit>/`:
 | `night.log.jsonl` | jede ENTER / PARTIAL / EXIT / FILTERED / PAUSE Zeile mit Grund, Größe, Fill-Preis, PnL |
 | `recap.json` | Start vs. End, bester / schlechtester Trade, Anzahl Trades, Win-Rate, Top-3-Coins, max. Drawdown |
 
+## Start per Doppelklick (Mac)
+
+Im Repo liegt **`Grok Bot starten.command`**. Abends im Finder doppelklicken:
+
+1. sucht Python ≥ 3.10 (zuerst die Version von python.org)
+2. holt mit `git pull` die neueste Version
+3. übernimmt den Helius-Key aus `~/.zshrc` und meldet, falls keiner da ist
+4. warnt, wenn der Mac auf Akku läuft
+5. startet `python3 -m grokbot --mode live --serve` mit `caffeinate`, damit der Mac wach bleibt
+
+Den Deckel offen lassen: Bei geschlossenem Deckel schläft ein MacBook trotz `caffeinate` ein.
+Beim ersten Mal fragt macOS evtl., ob Python eingehende Verbindungen annehmen darf: **Erlauben**,
+sonst erreicht das Handy das Dashboard nicht. Beenden morgens mit Ctrl+C im Terminal-Fenster.
+
+Lässt sich die Datei nicht öffnen: im Finder Rechtsklick → Öffnen, oder im Terminal
+`chmod +x "Grok Bot starten.command"`.
+
 ## Dashboard am Handy ansehen
 
 Mit `--serve` startet der Bot einen kleinen Webserver für das Dashboard:
