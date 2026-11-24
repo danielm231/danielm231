@@ -63,9 +63,33 @@ Ich habe 40 % bei **2×** angenommen.
   Holder, Top 10, LP-Lock, Creator-Anteil), Jupiter-Sell-Quote als Honeypot-Check.
   Fills bleiben simuliert, inklusive Price Impact, 0,3 % Gebühr und 1 % MEV/Latenz-Aufschlag.
 
-**Smart Money / KOL im Live-Modus:** dafür braucht es einen Wallet-Tracker (z. B. Helius-Webhooks
-auf die 40 Wallets). Ohne den feuern diese beiden Signale nie. Der Feed hat dafür den Hook
-`LiveFeed(wallet_activity=fn)`, wobei `fn(mint, now) -> (anzahl_smart_wallet_käufe_10min, kol_gekauft)`.
+### Smart Money / KOL über Helius
+
+Der Agent `WALLETS` (`grokbot/feeds/helius.py`) fragt im Live-Modus regelmäßig die letzten
+Swaps jeder beobachteten Wallet über die Helius Enhanced Transactions API ab. Ein **Kauf** ist ein
+Swap, bei dem die Wallet einen Token bekommt, der nicht SOL/USDC/USDT ist.
+
+- **smart money**: 3+ Smart-Money-Wallets kaufen denselben Token innerhalb von 10 min
+- **KOL bought**: mindestens eine KOL-Wallet hat ihn in den letzten 30 min gekauft
+
+Einrichten:
+
+1. Kostenlosen API-Key auf https://dashboard.helius.dev holen
+2. Wallets eintragen, eine Adresse pro Zeile: `wallets/smart_money.txt` (das Original nutzt 40)
+   und `wallets/kol.txt`
+3. Starten:
+
+```bash
+export HELIUS_API_KEY=dein-key
+python -m grokbot --mode live --now
+# optional: --smart-wallets pfad.txt --kol-wallets pfad.txt --helius-poll 60
+```
+
+Ohne Key oder ohne Wallets bleibt der Tracker aus (`WALLETS off` im Dashboard), dann feuern diese
+zwei Signale nie. Jede Abfrage kostet pro Wallet einen API-Call: 40 Wallets alle 60 s sind
+~19.000 Calls pro Nacht. Prüfe im Helius-Dashboard, ob dein Plan das abdeckt, und erhöhe sonst
+`--helius-poll`. Pro Wallet werden die letzten 20 Swaps gelesen. Bei Wallets, die extrem viel
+handeln, können dazwischen Käufe fehlen.
 
 ## Tests
 

@@ -1,0 +1,6 @@
+# Smart-Money-Wallets (Solana), eine Adresse pro Zeile.
+# Alles nach '#' wird ignoriert, z. B.:
+# <wallet-adresse>  # optionaler Name
+#
+# Der Scanner meldet "smart money", wenn 3+ dieser Wallets denselben Token
+# innerhalb von 10 Minuten kaufen. Das Original nutzt 40 Wallets.

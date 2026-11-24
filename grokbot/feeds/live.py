@@ -40,6 +40,7 @@ class LiveFeed:
     def __init__(self, wallet_activity: WalletActivity | None = None,
                  rug_cache_s: int = 300, max_tokens: int = 60):
         self.wallet_activity = wallet_activity
+        self.tracker = None   # optional: object with .name/.status for the dashboard
         self.rug_cache_s = rug_cache_s
         self.max_tokens = max_tokens
         self.watch: deque[str] = deque(maxlen=max_tokens)    # mints we follow
@@ -169,6 +170,8 @@ class LiveFeed:
         )
 
     def snapshots(self, now: datetime) -> list[PairSnapshot]:
+        if hasattr(self.wallet_activity, "refresh"):
+            self.wallet_activity.refresh()     # keep wallet history fresh every tick
         self._discover()
         pairs = self._pairs(list(self.watch))
         out = []

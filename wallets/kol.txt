@@ -1,0 +1,2 @@
+# KOL-Wallets (Influencer, die nachweislich selbst kaufen), eine Adresse pro Zeile.
+# Signal "KOL bought": mindestens eine davon hat den Token in den letzten 30 Minuten gekauft.

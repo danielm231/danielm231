@@ -10,6 +10,7 @@ from pathlib import Path
 from .config import BotConfig
 from .dashboard import terminal, write_html
 from .feeds import LiveFeed, SimulatedFeed
+from .feeds.helius import HeliusWalletTracker, load_wallets
 from .orchestrator import Orchestrator, session_window
 
 
@@ -25,6 +26,12 @@ def main(argv=None) -> dict:
     ap.add_argument("--now", action="store_true", help="live: start immediately instead of waiting for --start")
     ap.add_argument("--out", default="runs", help="output folder for log, dashboard, recap")
     ap.add_argument("--quiet", action="store_true", help="don't echo log lines")
+    ap.add_argument("--smart-wallets", default="wallets/smart_money.txt",
+                    help="live: file with smart-money wallet addresses (Helius tracker)")
+    ap.add_argument("--kol-wallets", default="wallets/kol.txt",
+                    help="live: file with KOL wallet addresses (Helius tracker)")
+    ap.add_argument("--helius-poll", type=int, default=60,
+                    help="live: seconds between Helius wallet polls (each poll = 1 call per wallet)")
     args = ap.parse_args(argv)
 
     cfg = BotConfig(start_balance=args.balance, session_start=args.start, session_end=args.end)
@@ -43,7 +50,15 @@ def main(argv=None) -> dict:
             start, end = start - timedelta(days=1), end - timedelta(days=1)
         if args.now:
             start = now
-        feed = LiveFeed()
+        tracker = HeliusWalletTracker(load_wallets(args.smart_wallets),
+                                      load_wallets(args.kol_wallets),
+                                      window_min=cfg.scanner.smart_money_window_min,
+                                      poll_seconds=args.helius_poll)
+        cfg.scanner.tracked_wallets = sorted(tracker.smart)
+        cfg.scanner.kol_wallets = sorted(tracker.kol)
+        print(f"Helius tracker: {tracker.status}")
+        feed = LiveFeed(wallet_activity=tracker if tracker.enabled else None)
+        feed.tracker = tracker
 
     bot = Orchestrator(cfg, feed, log_path=out / "night.log.jsonl", echo=not args.quiet)
     print(f"Grok Bot [{args.mode}] PAPER TRADING  {start:%Y-%m-%d %H:%M} -> {end:%H:%M}  "

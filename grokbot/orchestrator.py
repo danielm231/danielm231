@@ -49,7 +49,11 @@ class Orchestrator:
     # --------------------------------------------------------------- helpers
     @property
     def agents(self):
-        return [self.scanner, self.rug, self.sizer, self.executor, self.log, self.equity]
+        agents = [self.scanner, self.rug, self.sizer, self.executor, self.log, self.equity]
+        tracker = getattr(self.feed, "tracker", None)
+        if tracker is not None:
+            agents.insert(1, tracker)
+        return agents
 
     def total_equity(self) -> float:
         return self.equity.cash + sum(
