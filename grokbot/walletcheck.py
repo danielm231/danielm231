@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .feeds import helius
-from .feeds.helius import QUOTE_MINTS, RpcError, load_wallets
+from .feeds.helius import MAX_TX_VERSION, QUOTE_MINTS, RpcError, load_wallets
 
 WSOL = "So11111111111111111111111111111111111111112"
 LAMPORTS = 1e9
@@ -185,6 +185,7 @@ class Checker:
         self.workers = workers
         self.max_credits = max_credits
         self.credits = 0
+        self.skipped: list[str] = []
 
     def _call(self, method: str, params: list):
         if self.max_credits is not None and self.credits >= self.max_credits:
@@ -219,8 +220,12 @@ class Checker:
         return out[: self.max_tx], reached_start and len(out) <= self.max_tx
 
     def _tx(self, sig: str) -> dict | None:
-        return self._call("getTransaction", [sig, {"encoding": "jsonParsed",
-                                                   "maxSupportedTransactionVersion": 0}])
+        try:
+            return self._call("getTransaction", [sig, {"encoding": "jsonParsed",
+                                                       "maxSupportedTransactionVersion": MAX_TX_VERSION}])
+        except RpcError as e:              # skip this one transaction, keep the rest
+            self.skipped.append(str(e))
+            return None
 
     @staticmethod
     def funder(wallet: str, tx: dict | None) -> str | None:
@@ -234,6 +239,7 @@ class Checker:
 
     def check(self, wallet: str) -> WalletReport:
         start = self.credits
+        self.skipped = []
         try:
             sigs, reached_start = self.signatures(wallet)
             with ThreadPoolExecutor(max_workers=self.workers) as pool:
@@ -245,10 +251,17 @@ class Checker:
                 if age < 14:
                     funder = self.funder(wallet, txs[-1])
             rep = score(wallet, swaps, age, funder, self.min_closed)
+            if self.skipped:
+                n = len(self.skipped)
+                if sigs and n == len(sigs):
+                    rep.verdict = "FEHLER"
+                    rep.reasons = [f"keine Transaktion lesbar: {self.skipped[0][:200]}"]
+                else:
+                    rep.reasons.append(f"{n} von {len(sigs)} Transaktionen nicht lesbar")
         except BudgetExceeded:
             rep = WalletReport(wallet, verdict="ABGEBROCHEN", reasons=["Credit-Limit erreicht"])
         except (urllib.error.URLError, TimeoutError, ValueError, RpcError) as e:
-            rep = WalletReport(wallet, verdict="FEHLER", reasons=[str(e)[:120]])
+            rep = WalletReport(wallet, verdict="FEHLER", reasons=[str(e)[:200]])
         rep.credits = self.credits - start
         return rep
 

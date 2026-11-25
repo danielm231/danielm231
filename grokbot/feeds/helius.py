@@ -33,6 +33,11 @@ QUOTE_MINTS = {
 }
 
 
+# Highest Solana transaction version we ask the RPC for. Newer versions exist on
+# mainnet; asking for less makes getTransaction fail for those transactions.
+MAX_TX_VERSION = 1
+
+
 class RpcError(Exception):
     pass
 
@@ -148,8 +153,13 @@ class HeliusWalletTracker:
             for s in sigs:
                 if s.get("err") or (s.get("blockTime") or 0) < oldest:
                     continue          # failed or too old to matter: don't spend a credit
-                tx = self._call("getTransaction", [s["signature"], {
-                    "encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}])
+                try:
+                    tx = self._call("getTransaction", [s["signature"], {
+                        "encoding": "jsonParsed", "maxSupportedTransactionVersion": MAX_TX_VERSION}])
+                except RpcError:
+                    with self._lock:
+                        self.errors += 1
+                    continue          # one unreadable tx must not hide the others
                 ts = datetime.fromtimestamp((tx or {}).get("blockTime") or s["blockTime"])
                 for mint in buys_from_tx(tx, wallet):
                     with self._lock:
