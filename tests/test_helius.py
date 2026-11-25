@@ -95,3 +95,28 @@ def test_tracker_disabled_without_key(monkeypatch):
     monkeypatch.delenv("HELIUS_RPC_URL", raising=False)
     t = HeliusWalletTracker(["S1"], [])
     assert not t.enabled and t("MEME", datetime.now()) == (0, False) and "off" in t.status
+
+
+def test_key_from_pasted_url(monkeypatch):
+    from grokbot.feeds.helius import clean_key, rpc_url_from_env
+    k = "00000000-1111-2222-3333-444444444444"
+    assert clean_key(k) == k
+    assert clean_key(f" 'https://mainnet.helius-rpc.com/?api-key={k}' ") == k
+    monkeypatch.delenv("HELIUS_RPC_URL", raising=False)
+    monkeypatch.setenv("HELIUS_API_KEY", f"https://mainnet.helius-rpc.com/?api-key={k}")
+    assert rpc_url_from_env() == f"https://mainnet.helius-rpc.com/?api-key={k}"
+
+
+def test_401_explains_the_key(monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+    from grokbot.feeds.helius import RpcError, _post
+
+    def deny(req, timeout=10.0):
+        raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, io.BytesIO(b""))
+    monkeypatch.setattr(urllib.request, "urlopen", deny)
+    monkeypatch.delenv("HELIUS_RPC_URL", raising=False)
+    import pytest
+    with pytest.raises(RpcError, match="HELIUS_API_KEY"):
+        _post("https://x", {"jsonrpc": "2.0", "id": 1, "method": "getHealth"})

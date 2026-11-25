@@ -13,14 +13,13 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
 from ..feeds import helius
-from ..feeds.helius import QUOTE_MINTS, RpcError
+from ..feeds.helius import MAX_TX_VERSION, QUOTE_MINTS, RpcError
 from ..models import BrokerError, PairSnapshot
 from ..walletcheck import swap_from_tx
 
@@ -59,8 +58,7 @@ class Solana:
 
     @classmethod
     def from_env(cls) -> "Solana":
-        key = os.environ.get("HELIUS_API_KEY", "")
-        url = os.environ.get("HELIUS_RPC_URL") or (helius.RPC.format(key=key) if key else "")
+        url = helius.rpc_url_from_env()
         if not url:
             raise SystemExit("Für Dry-Run/Echtgeld wird HELIUS_API_KEY (oder HELIUS_RPC_URL) benötigt.")
         return cls(url)
@@ -198,7 +196,7 @@ class JupiterBroker:
     def _read_swap(self, sig: str):
         for _ in range(10):
             tx = self.sol.rpc("getTransaction", [sig, {"encoding": "jsonParsed",
-                                                       "maxSupportedTransactionVersion": 0,
+                                                       "maxSupportedTransactionVersion": MAX_TX_VERSION,
                                                        "commitment": "confirmed"}])
             if tx:
                 fee = ((tx.get("meta") or {}).get("fee") or 0) / LAMPORTS

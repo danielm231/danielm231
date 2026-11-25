@@ -33,16 +33,45 @@ QUOTE_MINTS = {
 }
 
 
+# Highest Solana transaction version we ask the RPC for. Newer versions exist on
+# mainnet; asking for less makes getTransaction fail for those transactions.
+MAX_TX_VERSION = 1
+
+
 class RpcError(Exception):
     pass
+
+
+def clean_key(value: str | None) -> str:
+    """Accept the bare key, or a whole Helius URL pasted by mistake (...?api-key=KEY)."""
+    v = (value or "").strip().strip("'\"")
+    if "api-key=" in v:
+        v = v.rsplit("api-key=", 1)[1].split("&", 1)[0]
+    return v
+
+
+def rpc_url_from_env(api_key: str | None = None) -> str:
+    """HELIUS_RPC_URL if set, else the mainnet RPC with HELIUS_API_KEY; '' if neither."""
+    url = (os.environ.get("HELIUS_RPC_URL") or "").strip().strip("'\"")
+    if url:
+        return url
+    key = clean_key(api_key or os.environ.get("HELIUS_API_KEY"))
+    return RPC.format(key=key) if key else ""
 
 
 def _post(url: str, payload: dict, timeout: float = 10.0):
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST",
                                  headers={"Content-Type": "application/json",
                                           "User-Agent": "grokbot-paper/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        body = json.loads(r.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            src = "HELIUS_RPC_URL" if os.environ.get("HELIUS_RPC_URL") else "HELIUS_API_KEY"
+            raise RpcError(f"HTTP {e.code}: Helius lehnt den Zugang ab - prüfe {src} "
+                           "(der Key hat 36 Zeichen, z. B. mit: echo ${#HELIUS_API_KEY})") from None
+        raise
     if "error" in body:
         raise RpcError(str(body["error"].get("message", body["error"])))
     return body.get("result")
@@ -85,8 +114,7 @@ class HeliusWalletTracker:
                  api_key: str | None = None, rpc_url: str | None = None,
                  window_min: int = 10, kol_window_min: int = 30,
                  poll_seconds: int = 60, workers: int = 5, sig_limit: int = 25):
-        key = api_key or os.environ.get("HELIUS_API_KEY", "")
-        self.rpc_url = rpc_url or os.environ.get("HELIUS_RPC_URL") or (RPC.format(key=key) if key else "")
+        self.rpc_url = rpc_url or rpc_url_from_env(api_key)
         self.smart = set(smart_wallets)
         self.kol = set(kol_wallets)
         self.window = timedelta(minutes=window_min)
@@ -125,8 +153,13 @@ class HeliusWalletTracker:
             for s in sigs:
                 if s.get("err") or (s.get("blockTime") or 0) < oldest:
                     continue          # failed or too old to matter: don't spend a credit
-                tx = self._call("getTransaction", [s["signature"], {
-                    "encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}])
+                try:
+                    tx = self._call("getTransaction", [s["signature"], {
+                        "encoding": "jsonParsed", "maxSupportedTransactionVersion": MAX_TX_VERSION}])
+                except RpcError:
+                    with self._lock:
+                        self.errors += 1
+                    continue          # one unreadable tx must not hide the others
                 ts = datetime.fromtimestamp((tx or {}).get("blockTime") or s["blockTime"])
                 for mint in buys_from_tx(tx, wallet):
                     with self._lock:

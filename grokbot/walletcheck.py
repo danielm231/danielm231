@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .feeds import helius
-from .feeds.helius import QUOTE_MINTS, RpcError, load_wallets
+from .feeds.helius import MAX_TX_VERSION, QUOTE_MINTS, RpcError, load_wallets
 
 WSOL = "So11111111111111111111111111111111111111112"
 LAMPORTS = 1e9
@@ -40,7 +40,9 @@ class Swap:
 
 def swap_from_tx(tx: dict, wallet: str) -> Swap | None:
     """Turn a jsonParsed transaction into a SOL<->token swap of `wallet`, or None."""
-    meta = (tx or {}).get("meta") or {}
+    if not tx:
+        return None                                   # skipped / unreadable transaction
+    meta = tx.get("meta") or {}
     if meta.get("err"):
         return None
     keys = [k["pubkey"] if isinstance(k, dict) else k
@@ -185,6 +187,7 @@ class Checker:
         self.workers = workers
         self.max_credits = max_credits
         self.credits = 0
+        self.skipped: list[str] = []
 
     def _call(self, method: str, params: list):
         if self.max_credits is not None and self.credits >= self.max_credits:
@@ -219,8 +222,12 @@ class Checker:
         return out[: self.max_tx], reached_start and len(out) <= self.max_tx
 
     def _tx(self, sig: str) -> dict | None:
-        return self._call("getTransaction", [sig, {"encoding": "jsonParsed",
-                                                   "maxSupportedTransactionVersion": 0}])
+        try:
+            return self._call("getTransaction", [sig, {"encoding": "jsonParsed",
+                                                       "maxSupportedTransactionVersion": MAX_TX_VERSION}])
+        except RpcError as e:              # skip this one transaction, keep the rest
+            self.skipped.append(str(e))
+            return None
 
     @staticmethod
     def funder(wallet: str, tx: dict | None) -> str | None:
@@ -234,6 +241,7 @@ class Checker:
 
     def check(self, wallet: str) -> WalletReport:
         start = self.credits
+        self.skipped = []
         try:
             sigs, reached_start = self.signatures(wallet)
             with ThreadPoolExecutor(max_workers=self.workers) as pool:
@@ -245,10 +253,17 @@ class Checker:
                 if age < 14:
                     funder = self.funder(wallet, txs[-1])
             rep = score(wallet, swaps, age, funder, self.min_closed)
+            if self.skipped:
+                n = len(self.skipped)
+                if sigs and n == len(sigs):
+                    rep.verdict = "FEHLER"
+                    rep.reasons = [f"keine Transaktion lesbar: {self.skipped[0][:200]}"]
+                else:
+                    rep.reasons.append(f"{n} von {len(sigs)} Transaktionen nicht lesbar")
         except BudgetExceeded:
             rep = WalletReport(wallet, verdict="ABGEBROCHEN", reasons=["Credit-Limit erreicht"])
         except (urllib.error.URLError, TimeoutError, ValueError, RpcError) as e:
-            rep = WalletReport(wallet, verdict="FEHLER", reasons=[str(e)[:120]])
+            rep = WalletReport(wallet, verdict="FEHLER", reasons=[str(e)[:200]])
         rep.credits = self.credits - start
         return rep
 
@@ -268,7 +283,6 @@ def _print(reports: list[WalletReport]) -> None:
 
 
 def main(argv=None) -> list[WalletReport]:
-    import os
     ap = argparse.ArgumentParser(description="Score candidate smart-money wallets (Helius RPC)")
     ap.add_argument("wallets", help="file with one wallet address per line")
     ap.add_argument("--days", type=int, default=30)
@@ -280,8 +294,7 @@ def main(argv=None) -> list[WalletReport]:
                     help="GUT wallets are written here in wallets/*.txt format")
     args = ap.parse_args(argv)
 
-    key = os.environ.get("HELIUS_API_KEY", "")
-    url = os.environ.get("HELIUS_RPC_URL") or (helius.RPC.format(key=key) if key else "")
+    url = helius.rpc_url_from_env()
     if not url:
         raise SystemExit("HELIUS_API_KEY (oder HELIUS_RPC_URL) ist nicht gesetzt.")
     wallets = load_wallets(args.wallets)

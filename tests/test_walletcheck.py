@@ -137,3 +137,26 @@ def test_truncated_history_is_not_treated_as_fresh(monkeypatch):
     monkeypatch.setattr(helius, "_post", FakeRpc({w: build_history(w, 9, 5, funded_by="X")}))
     r = walletcheck.Checker("http://x", max_tx=10).check(w)
     assert r.wallet_age_days is None and r.funder is None and r.credits == 11
+
+
+def test_unreadable_transactions_are_skipped(monkeypatch):
+    from grokbot.feeds.helius import MAX_TX_VERSION, RpcError
+    w = "E" * 44
+    rpc = FakeRpc({w: build_history(w, 9, 5)})
+    bad = {"EEEb0", "EEEb1"}
+
+    def post(url, payload, timeout=10.0):
+        if payload["method"] == "getTransaction":
+            assert payload["params"][1]["maxSupportedTransactionVersion"] == MAX_TX_VERSION
+            if payload["params"][0] in bad:
+                raise RpcError("Transaction version (2) is not supported")
+        return rpc(url, payload)
+
+    monkeypatch.setattr(helius, "_post", post)
+    r = walletcheck.Checker("http://x").check(w)
+    assert r.verdict != "FEHLER" and r.closed == 12
+    assert any("2 von 28 Transaktionen nicht lesbar" in x for x in r.reasons)
+
+    bad.update(s for s, _ in rpc.history[w])
+    r = walletcheck.Checker("http://x").check(w)
+    assert r.verdict == "FEHLER" and "keine Transaktion lesbar" in r.reasons[0]
