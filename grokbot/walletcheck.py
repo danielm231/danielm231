@@ -40,7 +40,9 @@ class Swap:
 
 def swap_from_tx(tx: dict, wallet: str) -> Swap | None:
     """Turn a jsonParsed transaction into a SOL<->token swap of `wallet`, or None."""
-    meta = (tx or {}).get("meta") or {}
+    if not tx:
+        return None                                   # skipped / unreadable transaction
+    meta = tx.get("meta") or {}
     if meta.get("err"):
         return None
     keys = [k["pubkey"] if isinstance(k, dict) else k
